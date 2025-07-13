@@ -1,2 +1,3 @@
 Tornado>=4.0,<4.99999.99999
 sockjs-tornado
+prometheus-client

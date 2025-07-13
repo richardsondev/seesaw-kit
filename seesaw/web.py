@@ -10,6 +10,16 @@ import time
 
 from sockjs.tornado import SockJSConnection, SockJSRouter
 from tornado import web, ioloop
+from prometheus_client import (
+    CollectorRegistry,
+    Gauge,
+    Counter,
+    Histogram,
+    generate_latest,
+    CONTENT_TYPE_LATEST,
+    ProcessCollector,
+    PlatformCollector,
+)
 
 from seesaw.config import realize
 from seesaw.web_util import BaseWebAdminHandler
@@ -18,6 +28,63 @@ PUBLIC_PATH = os.path.abspath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "public"))
 TEMPLATES_PATH = os.path.abspath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates"))
+
+# Prometheus metrics setup
+METRICS_REGISTRY = CollectorRegistry()
+ProcessCollector(registry=METRICS_REGISTRY)
+PlatformCollector(registry=METRICS_REGISTRY)
+ACTIVE_ITEMS = Gauge(
+    "seesaw_active_items",
+    "Number of items currently being processed",
+    ["project"],
+    registry=METRICS_REGISTRY,
+)
+
+# Track counts of items by state
+ITEM_STATE_GAUGE = Gauge(
+    "seesaw_items_state",
+    "Number of items by state",
+    ["state", "project"],
+    registry=METRICS_REGISTRY,
+)
+
+# Total items processed by state
+ITEM_STATE_TOTAL = Counter(
+    "seesaw_items_total",
+    "Total number of items processed by state",
+    ["state", "project"],
+    registry=METRICS_REGISTRY,
+)
+
+# Measure how long each item took to process
+ITEM_DURATION_SECONDS = Histogram(
+    "seesaw_item_duration_seconds",
+    "Time spent processing an item",
+    ["project", "state"],
+    registry=METRICS_REGISTRY,
+)
+
+# Bandwidth metrics
+BANDWIDTH_TOTAL_RECEIVED = Gauge(
+    "seesaw_bandwidth_received_bytes_total",
+    "Total bytes received",
+    registry=METRICS_REGISTRY,
+)
+BANDWIDTH_TOTAL_SENT = Gauge(
+    "seesaw_bandwidth_sent_bytes_total",
+    "Total bytes sent",
+    registry=METRICS_REGISTRY,
+)
+BANDWIDTH_RECEIVING = Gauge(
+    "seesaw_bandwidth_receiving_bytes_per_second",
+    "Receiving rate in bytes per second",
+    registry=METRICS_REGISTRY,
+)
+BANDWIDTH_SENDING = Gauge(
+    "seesaw_bandwidth_sending_bytes_per_second",
+    "Sending rate in bytes per second",
+    registry=METRICS_REGISTRY,
+)
 
 
 class IndexHandler(BaseWebAdminHandler):
@@ -180,6 +247,17 @@ class ApiHandler(BaseWebAdminHandler):
             self.render("help.html", warrior=self.warrior)
 
 
+class MetricsHandler(BaseWebAdminHandler):
+    """Expose Prometheus metrics."""
+
+    def get(self):
+        self.set_header("Content-Type", CONTENT_TYPE_LATEST)
+        output = generate_latest(METRICS_REGISTRY)
+        if not isinstance(output, (bytes, bytearray)):
+            output = output.encode("utf-8")
+        self.write(output)
+
+
 class SeesawConnection(SockJSConnection):
     '''A WebSocket server that communicates the state of the warrior.'''
     instance_id = ("%d-%f" % (os.getpid(), random.random()))
@@ -230,6 +308,10 @@ class SeesawConnection(SockJSConnection):
         if cls.warrior:
             bw_stats = cls.warrior.bandwidth_stats()
             if bw_stats:
+                BANDWIDTH_TOTAL_RECEIVED.set(bw_stats.get("received", 0))
+                BANDWIDTH_TOTAL_SENT.set(bw_stats.get("sent", 0))
+                BANDWIDTH_RECEIVING.set(bw_stats.get("receiving", 0))
+                BANDWIDTH_SENDING.set(bw_stats.get("sending", 0))
                 cls.broadcast("bandwidth", bw_stats)
 
     @classmethod
@@ -306,10 +388,36 @@ class SeesawConnection(SockJSConnection):
     @classmethod
     def handle_start_item(cls, runner, pipeline, item):
         cls.item_monitors[item] = ItemMonitor(item)
+        try:
+            project = pipeline.project.title if pipeline.project else "unknown"
+            ACTIVE_ITEMS.labels(project=project).inc()
+            ITEM_STATE_GAUGE.labels(state="running", project=project).inc()
+            ITEM_STATE_TOTAL.labels(state="running", project=project).inc()
+        except Exception:
+            pass
 
     @classmethod
     def handle_finish_item(cls, runner, pipeline, item):
         del cls.item_monitors[item]
+        try:
+            project = pipeline.project.title if pipeline.project else "unknown"
+            ACTIVE_ITEMS.labels(project=project).dec()
+            ITEM_STATE_GAUGE.labels(state="running", project=project).dec()
+            duration = (item.end_time or time.time()) - item.start_time
+            if item.completed:
+                ITEM_STATE_GAUGE.labels(state="completed", project=project).inc()
+                ITEM_STATE_TOTAL.labels(state="completed", project=project).inc()
+                ITEM_DURATION_SECONDS.labels(project=project, state="completed").observe(duration)
+            elif item.failed:
+                ITEM_STATE_GAUGE.labels(state="failed", project=project).inc()
+                ITEM_STATE_TOTAL.labels(state="failed", project=project).inc()
+                ITEM_DURATION_SECONDS.labels(project=project, state="failed").observe(duration)
+            elif item.canceled:
+                ITEM_STATE_GAUGE.labels(state="canceled", project=project).inc()
+                ITEM_STATE_TOTAL.labels(state="canceled", project=project).inc()
+                ITEM_DURATION_SECONDS.labels(project=project, state="canceled").observe(duration)
+        except Exception:
+            pass
 
     @classmethod
     def broadcast(cls, event, message):
@@ -356,7 +464,9 @@ def start_runner_server(project, runner, bind_address="localhost", port_number=8
             (r"/(.*\.(html|css|js|swf|png|ico))$",
                 web.StaticFileHandler, {"path": PUBLIC_PATH}),
             ("/", IndexHandler),
-            ("/api/(.+)$", ApiHandler, {"runner": runner})]),
+            ("/api/(.+)$", ApiHandler, {"runner": runner}),
+            ("/metrics", MetricsHandler),
+        ]),
         #  flash_policy_port = 843,
         #  flash_policy_file=os.path.join(PUBLIC_PATH, "flashpolicy.xml"),
         socket_io_address=bind_address,
@@ -410,7 +520,9 @@ def start_warrior_server(warrior, bind_address="localhost", port_number=8001,
             (r"/(.*\.(html|css|js|swf|png|ico))$",
                 web.StaticFileHandler, {"path": PUBLIC_PATH}),
             ("/", IndexHandler),
-            ("/api/(.+)$", ApiHandler, {"warrior": warrior})]),
+            ("/api/(.+)$", ApiHandler, {"warrior": warrior}),
+            ("/metrics", MetricsHandler),
+        ]),
         #   flash_policy_port = 843,
         #   flash_policy_file = os.path.join(PUBLIC_PATH, "flashpolicy.xml"),
         socket_io_address=bind_address,

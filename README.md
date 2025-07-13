@@ -27,6 +27,20 @@ To run the example pipeline:
 
 Point your browser to `http://127.0.0.1:8001/`.
 
+The web server also exposes Prometheus metrics on `/metrics`. If you set an
+HTTP username and password for the interface, the same credentials are required
+to scrape the metrics endpoint. Metrics include:
+
+- `seesaw_active_items{project="<project>"}` – number of currently active items
+  per project
+- `seesaw_items_state{state="<state>",project="<project>"}` – gauge of items in
+  each state
+- `seesaw_items_total{state="<state>",project="<project>"}` – counter for items
+  that have entered each state
+- `seesaw_item_duration_seconds{state="<state>",project="<project>"}` – how
+  long items spent processing
+- `seesaw_bandwidth_*` – current and total bandwidth statistics
+
 You can also use `run-pipeline2` or `run-pipeline3` to be explicit for the Python version.
 
 
