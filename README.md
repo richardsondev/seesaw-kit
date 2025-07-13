@@ -44,6 +44,10 @@ to scrape the metrics endpoint. Metrics include:
 - `seesaw_bandwidth_receiving_bytes_per_second` – current inbound bandwidth
 - `seesaw_bandwidth_sending_bytes_per_second` – current outbound bandwidth
 
+Example Prometheus configuration and a sample Grafana dashboard are provided in
+the `examples/` directory. Adjust the scrape credentials and hostnames to match
+your environment.
+
 You can also use `run-pipeline2` or `run-pipeline3` to be explicit for the Python version.
 
 

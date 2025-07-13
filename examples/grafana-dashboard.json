@@ -1,0 +1,42 @@
+{
+  "title": "Seesaw Metrics",
+  "timezone": "browser",
+  "panels": [
+    {
+      "type": "graph",
+      "title": "Active Items",
+      "datasource": "Prometheus",
+      "targets": [
+        {"expr": "seesaw_active_items", "legendFormat": "{{project}}"}
+      ],
+      "id": 1,
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 0}
+    },
+    {
+      "type": "graph",
+      "title": "Item States",
+      "datasource": "Prometheus",
+      "targets": [
+        {"expr": "seesaw_items_state{state=\"running\"}", "legendFormat": "running"},
+        {"expr": "seesaw_items_state{state=\"completed\"}", "legendFormat": "completed"},
+        {"expr": "seesaw_items_state{state=\"failed\"}", "legendFormat": "failed"},
+        {"expr": "seesaw_items_state{state=\"canceled\"}", "legendFormat": "canceled"}
+      ],
+      "id": 2,
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 8}
+    },
+    {
+      "type": "graph",
+      "title": "Bandwidth In/Out",
+      "datasource": "Prometheus",
+      "targets": [
+        {"expr": "seesaw_bandwidth_receiving_bytes_per_second", "legendFormat": "receiving"},
+        {"expr": "seesaw_bandwidth_sending_bytes_per_second", "legendFormat": "sending"}
+      ],
+      "id": 3,
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 16}
+    }
+  ],
+  "schemaVersion": 16,
+  "version": 1
+}
