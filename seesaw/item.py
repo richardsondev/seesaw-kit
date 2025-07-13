@@ -4,13 +4,13 @@ import os.path
 import shutil
 import traceback
 import time
-import collections
+from collections.abc import MutableMapping
 
 from seesaw.event import Event
 import seesaw.six
 
 
-class ItemData(collections.MutableMapping):
+class ItemData(MutableMapping):
     '''Base item data property container.
 
     Args:
